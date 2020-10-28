@@ -474,8 +474,9 @@ def test(val_loader, model, epoch, use_cuda):
             hh, ww = vis_ids_h.flatten(), vis_ids_w.flatten()  # [height*width*topk_vis]
             pcc, phh, pww = pcid.flatten(), phid.flatten(), pwid.flatten()
 
-            pcc[pcc != 0] += iter
-            lbl = lbls_resize2[pcc, hh, ww, :]
+            lpcc = pcc
+            lpcc[lpcc != 0] += iter
+            lbl = lbls_resize2[lpcc, hh, ww, :]
 
             # Add the labels weighted by the affinities to locations (h,w) in predlbls:
             np.add.at(predlbls, (h, w), lbl * corrfeat2[pcc, phh, pww, h, w][:, None])
