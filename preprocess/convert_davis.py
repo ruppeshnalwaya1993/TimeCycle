@@ -1,6 +1,6 @@
 import os
 import numpy as np
-import scipy.misc
+import imageio
 import cv2
 
 from PIL import Image
@@ -51,12 +51,11 @@ for i in range(len(jpglist)):
     outfolder = out_folder + fname + '/'
 
     if not os.path.exists(outfolder):
-        os.mkdir(outfolder, 0755 )
-
+        os.mkdir(outfolder, 0o755 )
     files = os.listdir(gtfolder)
 
     firstim = gtfolder + "{:05d}.png".format(0)
-    lblimg  = scipy.misc.imread(firstim)
+    lblimg  = imageio.imread(firstim)
 
     height = lblimg.shape[0]
     width  = lblimg.shape[1]
@@ -70,7 +69,7 @@ for i in range(len(jpglist)):
 
         outname = outfolder + "{:05d}.png".format(j + 1)
         inname  = current_folder + str(i) + '_' + str(j + topk) + '_mask.png'
-        lblimg  = scipy.misc.imread(inname)
+        lblimg  = imageio.imread(inname)
         lblidx  = np.zeros((lblimg.shape[0], lblimg.shape[1]))
 
         for h in range(lblimg.shape[0]):

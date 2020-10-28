@@ -1,13 +1,13 @@
 import os
 import numpy as np
 
-outlist = 'YOUR_DATASET_FOLDER/davis/DAVIS/vallist.txt'
-imgfolder = 'YOUR_DATASET_FOLDER/davis/DAVIS/JPEGImages/480p/'
-lblfolder = 'YOUR_DATASET_FOLDER/davis/DAVIS/Annotations/480p/'
+outlist = 'YOUR_DATASET_FOLDER/davis-2017/data/DAVIS/vallist.txt'
+imgfolder = 'YOUR_DATASET_FOLDER/davis-2017/data/DAVIS/JPEGImages/480p/'
+lblfolder = 'YOUR_DATASET_FOLDER/davis-2017/data/DAVIS/Annotations/480p/'
 
 jpglist = []
 
-f1 = open('YOUR_DATASET_FOLDER/davis/DAVIS/ImageSets/2017/val.txt', 'r')
+f1 = open('YOUR_DATASET_FOLDER/davis-2017/data/DAVIS/ImageSets/2017/val.txt', 'r')
 for line in f1:
     line = line[:-1]
     jpglist.append(line)

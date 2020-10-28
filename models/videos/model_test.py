@@ -8,7 +8,7 @@ import math
 import copy
 import numpy as np
 from . import resnet_res4s1
-from . import inflated_resnet
+from . import inflated_resnet18 as inflated_resnet
 # import i3res_res3
 import torchvision
 
@@ -31,8 +31,8 @@ class CycleTime(nn.Module):
 
         dim = 512
         print(pretrained)
-
-        resnet = resnet_res4s1.resnet50(pretrained=pretrained)
+        self.pretrained = pretrained
+        resnet = resnet_res4s1.resnet18(pretrained=pretrained)
         self.encoderVideo = inflated_resnet.InflatedResNet(copy.deepcopy(resnet))
         self.detach_network = detach_network
 
@@ -97,23 +97,50 @@ class CycleTime(nn.Module):
         self.xs = xs
 
 
-    def compute_corr_softmax(self, patch_feat1, r50_feat2, finput_num, spatial_out1):
+    def compute_corr_softmax(self, patch_feat1, r50_feat2, search_radius=12):
+        # brussell: Updated this function
+        # patch_feat1 - [batch_size, feature_dim, height, width]
+        # r50_feat2 - [batch_size, feature_dim, num_context_frames, height, width]
 
-        r50_feat2 = r50_feat2.transpose(3, 4) # for the inlier counter
-        r50_feat2 = r50_feat2.contiguous()
-        r50_feat2_vec = r50_feat2.view(r50_feat2.size(0), r50_feat2.size(1), -1)
-        r50_feat2_vec = r50_feat2_vec.transpose(1, 2)
+        #np.savez('/home/code-base/compute_corr_softmax_inputs.npz', patch_feat1=patch_feat1.cpu().detach().numpy(), r50_feat2=r50_feat2.cpu().detach().numpy())
+        patch_size = 2*search_radius+1
+        batch_size, feature_dim, num_context_frames, height, width = r50_feat2.size()
+        assert(height==patch_feat1.size(2))
+        assert(width==patch_feat1.size(3))
 
-        patch_feat1_vec = patch_feat1.view(patch_feat1.size(0), patch_feat1.size(1), -1)
-        corrfeat = torch.matmul(r50_feat2_vec, patch_feat1_vec)
+        r50_feat2_pad = F.pad(r50_feat2, (search_radius, search_radius, search_radius, search_radius))
+        r50_feat2_pad = r50_feat2_pad.contiguous()
+        corrfeat = torch.zeros(batch_size, num_context_frames, patch_size, patch_size, height, width).cuda()
+        valid = torch.ones(batch_size, num_context_frames, patch_size, patch_size, height, width).cuda()
+        for c in range(num_context_frames):
+            for h in range(-search_radius, search_radius+1):
+                hmin = search_radius + h
+                hmax = height + search_radius + h
+                for w in range(-search_radius, search_radius+1):
+                    wmin = search_radius + w
+                    wmax = width + search_radius + w
+                    corrfeat[:, c, hmin, wmin, :, :] = \
+                        torch.sum(r50_feat2_pad[:, :, c, hmin:hmax, wmin:wmax] * patch_feat1, axis=1)  # 10s
+                    if h < 0:
+                        valid[:, c, hmin, wmin, :-h, :] = 0
+                    if w < 0:
+                        valid[:, c, hmin, wmin, :, :-w] = 0
+                    if h > 0:
+                        valid[:, c, hmin, wmin, -h:, :] = 0
+                    if w > 0:
+                        valid[:, c, hmin, wmin, :, -w:] = 0
+
+        corrfeat = corrfeat.view(batch_size, num_context_frames*patch_size**2, -1)
 
         # if self.use_l2norm is False:
-        corrfeat = torch.div(corrfeat, self.div_num**-.5)
+        corrfeat = torch.div(corrfeat, self.div_num**-.5)  ### brussell: This line should be removed in final code.
+        corrfeat  = corrfeat.view(batch_size, num_context_frames, patch_size**2, height, width)
+        corrfeat  = F.softmax(corrfeat/self.T, dim=2)
+        corrfeat  = corrfeat.view(batch_size, num_context_frames, patch_size, patch_size, height, width)
+        corrfeat[valid<1] = -1.0
+        corrfeat  = corrfeat.contiguous()
 
-        corrfeat  = corrfeat.view(corrfeat.size(0), finput_num, spatial_out1 * spatial_out1, spatial_out1, spatial_out1)
-        corrfeat  = F.softmax(corrfeat, dim=2)
-        corrfeat  = corrfeat.view(corrfeat.size(0), finput_num * spatial_out1 * spatial_out1, spatial_out1, spatial_out1)
-
+        #np.savez('/home/code-base/compute_corr_softmax_output.npz', corrfeat=corrfeat.cpu().detach().numpy())
         return corrfeat
 
 
@@ -132,7 +159,8 @@ class CycleTime(nn.Module):
         if self.detach_network is True:
             r50_feat1 = r50_feat1.detach()
 
-        r50_feat1 = self.afterconv1(r50_feat1)
+        if not self.pretrained:
+            r50_feat1 = self.afterconv1(r50_feat1)
         r50_feat1_relu = self.relu(r50_feat1)
         # if self.use_softmax is False or self.use_l2norm is True:
         r50_feat1_norm = F.normalize(r50_feat1_relu, p=2, dim=1)
@@ -142,16 +170,19 @@ class CycleTime(nn.Module):
         img2 = img2.transpose(1, 2)
         img_feat2_pre = self.encoderVideo(img2)
 
-        img_feat2 = self.afterconv1(img_feat2_pre)
+        if not self.pretrained:
+            img_feat2 = self.afterconv1(img_feat2_pre)
+        else:
+            img_feat2 = img_feat2_pre
         img_feat2 = self.relu(img_feat2)
         img_feat2 = img_feat2.contiguous()
         img_feat2 = img_feat2.view(img_feat2.size(0), img_feat2.size(1), img_feat2.size(3), img_feat2.size(4))
         img_feat2_norm = F.normalize(img_feat2, p=2, dim=1)
 
-        spatial_out1 = img_feat2.size(3)
+        spatial_out1 = img_feat2.size(2)
+        spatial_out2 = img_feat2.size(3)
 
-        corrfeat_trans_matrix_target  = self.compute_corr_softmax(img_feat2_norm, r50_feat1_norm, finput_num, spatial_out1)
-        corrfeat_trans_matrix_target = corrfeat_trans_matrix_target.contiguous()
-        corrfeat_trans_matrix_target2 = corrfeat_trans_matrix_target.view(corrfeat_trans_matrix_target.size(0) * finput_num, spatial_out1 * spatial_out1, spatial_out1, spatial_out1)
+        # brussell: Updated the next line:
+        corrfeat_trans_matrix_target  = self.compute_corr_softmax(img_feat2_norm, r50_feat1_norm)
 
-        return corrfeat_trans_matrix_target2
+        return corrfeat_trans_matrix_target

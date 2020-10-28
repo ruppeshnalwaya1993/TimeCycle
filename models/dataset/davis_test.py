@@ -15,8 +15,8 @@ from utils.transforms import *
 import torchvision.transforms as transforms
 
 import scipy.io as sio
-import scipy.misc
-
+from PIL import Image
+import PIL
 
 # get the video frames
 # two patches in the future frame, one is center, the other is one of the 8 patches around
@@ -93,13 +93,19 @@ class DavisSet(data.Dataset):
             newh, neww = ht, wd
 
             if ht <= wd:
-                ratio  = 1.0 #float(wd) / float(ht)
+                ratio = float(wd) / float(ht)
+                if ht <= 480:
+                    ratio = min(880.0/480.0, ratio)
+                #ratio  = 1.0 #float(wd) / float(ht)
                 # width, height
                 img = resize(img, int(self.imgSize * ratio), self.imgSize)
                 newh = self.imgSize
                 neww = int(self.imgSize * ratio)
             else:
-                ratio  = 1.0 #float(ht) / float(wd)
+                ratio = float(ht) / float(wd)
+                if wd <= 480:
+                    ratio = min(880.0/480.0, ratio)
+                #ratio  = 1.0 #float(ht) / float(wd)
                 # width, height
                 img = resize(img, self.imgSize, int(self.imgSize * ratio))
                 newh = int(self.imgSize * ratio)
@@ -110,9 +116,8 @@ class DavisSet(data.Dataset):
 
             img = color_normalize(img, mean, std)
             imgs[i] = img
-            lblimg  = scipy.misc.imread(lbl_path)
-            lblimg  = scipy.misc.imresize( lblimg, (newh, neww), 'nearest' )
-
+            lblimg  = Image.open(lbl_path).convert("RGB")
+            lblimg  = np.array(lblimg.resize((neww, newh), resample=PIL.Image.NEAREST))
             lbls.append(lblimg.copy())
 
         gridx = 0

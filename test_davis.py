@@ -14,7 +14,6 @@ import imageio
 
 import numpy as np
 import pickle
-import scipy.misc
 
 import torch
 import torch.nn as nn
@@ -37,7 +36,7 @@ from torch.autograd import Variable
 
 
 params = {}
-params['filelist'] = '/nfs.yoda/xiaolonw/davis/DAVIS/vallist.txt'
+params['filelist'] = os.path.join(os.path.dirname(__file__), 'YOUR_DATASET_FOLDER/davis-2017/data/DAVIS/vallist.txt')
 # params['batchSize'] = 24
 params['imgSize'] = 320
 params['cropSize'] = 320
@@ -79,7 +78,7 @@ parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
 parser.add_argument('--weight-decay', '--wd', default=1e-4, type=float,
                     metavar='W', help='weight decay (default: 1e-4)')
 # Checkpoints
-parser.add_argument('-c', '--checkpoint', default='/scratch/xiaolonw/pytorch_checkpoints/unsup3dnl_single_contrast', type=str, metavar='PATH',
+parser.add_argument('-c', '--checkpoint', default='./pytorch_checkpoints/unsup3dnl_single_contrast', type=str, metavar='PATH',
                     help='path to save checkpoint (default: checkpoint)')
 parser.add_argument('--resume', default='', type=str, metavar='PATH',
                     help='path to latest checkpoint (default: none)')
@@ -96,7 +95,7 @@ parser.add_argument('--gpu-id', default='0,1,2,3', type=str,
 parser.add_argument('--seperate2d', type=int, default=0, help='manual seed')
 parser.add_argument('--batchSize', default=1, type=int,
                     help='batchSize')
-parser.add_argument('--T', default=1.0, type=float,
+parser.add_argument('--T', default=0.07, type=float,
                     help='temperature')
 parser.add_argument('--gridSize', default=9, type=int,
                     help='temperature')
@@ -107,7 +106,7 @@ parser.add_argument('--lamda', default=0.1, type=float,
 
 parser.add_argument('--pretrained_imagenet', type=str_to_bool, nargs='?', const=True, default=False,
                     help='pretrained_imagenet')
-parser.add_argument('--topk_vis', default=20, type=int,
+parser.add_argument('--topk_vis', default=10, type=int,
                     help='topk_vis')
 
 parser.add_argument('--videoLen', default=8, type=int,
@@ -167,6 +166,7 @@ if use_cuda:
     torch.cuda.manual_seed_all(args.manualSeed)
 
 best_loss = 0  # best test accuracy
+offset_ = 0
 
 def partial_load(pretrained_dict, model):
     model_dict = model.state_dict()
@@ -185,13 +185,15 @@ def main():
     if not os.path.isdir(args.checkpoint):
         mkdir_p(args.checkpoint)
 
+    dataset = davis.DavisSet(params, is_train=False)
+    dataset = torch.utils.data.Subset(dataset, range(offset_, len(dataset)))
     val_loader = torch.utils.data.DataLoader(
-        davis.DavisSet(params, is_train=False),
+        dataset,
         batch_size=int(params['batchSize']), shuffle=False,
         num_workers=args.workers, pin_memory=True)
 
 
-    model = video3d.CycleTime(class_num=params['classNum'], trans_param_num=3, pretrained=args.pretrained_imagenet, temporal_out=args.temporal_out)
+    model = video3d.CycleTime(class_num=params['classNum'], trans_param_num=3, pretrained=args.pretrained_imagenet, temporal_out=args.temporal_out, T=args.T)
     model = torch.nn.DataParallel(model).cuda()
 
     cudnn.benchmark = False
@@ -249,6 +251,8 @@ def test(val_loader, model, epoch, use_cuda):
 
     # bar = Bar('Processing', max=len(val_loader))
     for batch_idx, (imgs_total, patch2_total, lbls, meta) in enumerate(val_loader):
+        batch_idx += offset_
+        print('batch_idx = {}'.format(batch_idx))
 
         finput_num_ori = params['videoLen']
         finput_num     = finput_num_ori
@@ -274,8 +278,8 @@ def test(val_loader, model, epoch, use_cuda):
         print('gridx: ' + str(gridx) + ' gridy: ' + str(gridy))
         print('total_frame_num: ' + str(total_frame_num))
 
-        height_dim = int(params['cropSize'] / 8)
-        width_dim  = int(params['cropSize'] / 8)
+        height_dim = int((int((int((height_len-1)/2+1) - 1)/2 +1) - 1)/2+1)#int(params['cropSize'] / 8)
+        width_dim  = int((int((int((width_len-1)/2+1) - 1)/2 +1) - 1)/2+1)#int(params['cropSize'] / 8)
 
         # processing labels
         lbls = lbls[0].data.cpu().numpy()
@@ -335,7 +339,7 @@ def test(val_loader, model, epoch, use_cuda):
                             lbls_resize[i, j, k, t] = 1
 
         for i in range(lbls.shape[0]):
-            lbls_resize2[i] = cv2.resize(lbls_resize[i], (height_dim, width_dim))
+            lbls_resize2[i] = cv2.resize(lbls_resize[i], (width_dim, height_dim))
 
 
         t02 = time.time()
@@ -361,21 +365,20 @@ def test(val_loader, model, epoch, use_cuda):
 
             img_now = img_now * 255
             img_now = np.transpose(img_now, (1, 2, 0))
-            img_now = cv2.resize(img_now, (img_now.shape[0] * 2, img_now.shape[1] * 2) )
+            img_now = cv2.resize(img_now, (img_now.shape[1] * 2, img_now.shape[0] * 2) )
 
             imgs_toprint.append(img_now)
 
             imname  = save_path + str(batch_idx) + '_' + str(t) + '_frame.jpg'
-            scipy.misc.imsave(imname, img_now)
+            imageio.imwrite(imname, np.uint8(img_now))
 
         for t in range(finput_num_ori):
 
             nowlbl = lbls_new[t]
             imname  = save_path + str(batch_idx) + '_' + str(t) + '_label.jpg'
-            scipy.misc.imsave(imname, nowlbl)
+            imageio.imwrite(imname, np.uint8(nowlbl))
 
-
-        now_batch_size = 4
+        now_batch_size = 1
 
         imgs_stack = []
         patch2_stack = []
@@ -385,8 +388,8 @@ def test(val_loader, model, epoch, use_cuda):
         trans_out_2_set = []
         corrfeat2_set = []
 
-        imgs_tensor = torch.Tensor(now_batch_size, finput_num, 3, params['cropSize'], params['cropSize'])
-        target_tensor = torch.Tensor(now_batch_size, 1, 3, params['cropSize'], params['cropSize'])
+        imgs_tensor = torch.Tensor(now_batch_size, finput_num, 3, imgs_total.shape[-2], imgs_total.shape[-1])#params['cropSize'], params['cropSize'])
+        target_tensor = torch.Tensor(now_batch_size, 1, 3, imgs_total.shape[-2], imgs_total.shape[-1])#params['cropSize'], params['cropSize'])
 
         imgs_tensor = torch.autograd.Variable(imgs_tensor.cuda())
         target_tensor = torch.autograd.Variable(target_tensor.cuda())
@@ -416,7 +419,6 @@ def test(val_loader, model, epoch, use_cuda):
                 target_tensor[i, 0] = imgs_total[0, iter + i + finput_num_ori]
 
             corrfeat2_now = model(imgs_tensor, target_tensor)
-            corrfeat2_now = corrfeat2_now.view(now_batch_size, finput_num_ori, corrfeat2_now.size(1), corrfeat2_now.size(2), corrfeat2_now.size(3))
 
             for i in range(now_batch_size2):
                 corrfeat2_set.append(corrfeat2_now[i].data.cpu().numpy())
@@ -424,100 +426,96 @@ def test(val_loader, model, epoch, use_cuda):
         t04 = time.time()
         print(t04-t03, 'model forward', t03-t02, 'image prep')
 
+
+
+        ### brussell: Updated this for loop.
         for iter in range(total_frame_num - finput_num_ori):
 
             if iter % 10 == 0:
                 print(iter)
 
-            imgs = imgs_total[:, iter + 1: iter + finput_num_ori, :, :, :]
-            imgs2 = imgs_total[:, 0, :, :, :].unsqueeze(1)
-            imgs = torch.cat((imgs2, imgs), dim=1)
-
-            # trans_out_2, corrfeat2 = model(imgs, patch2)
-            corrfeat2   = corrfeat2_set[iter]
-            corrfeat2   = torch.from_numpy(corrfeat2)
-
-
-            out_frame_num = int(finput_num)
-            height_dim = corrfeat2.size(2)
-            width_dim = corrfeat2.size(3)
-
-            corrfeat2 = corrfeat2.view(corrfeat2.size(0), height_dim, width_dim, height_dim, width_dim)
-            corrfeat2 = corrfeat2.data.cpu().numpy()
-
-
-            topk_vis = args.topk_vis
-            vis_ids_h = np.zeros((corrfeat2.shape[0], height_dim, width_dim, topk_vis)).astype(np.int)
-            vis_ids_w = np.zeros((corrfeat2.shape[0], height_dim, width_dim, topk_vis)).astype(np.int)
+            corrfeat2 = corrfeat2_set[iter]
+            num_context_frames, patch_dim, _, height_dim, width_dim = corrfeat2.shape
+            pcenter = patch_dim // 2  # patch center location
+            atten1d = corrfeat2.reshape((num_context_frames * patch_dim ** 2, height_dim, width_dim))
 
             t05 = time.time()
 
-            atten1d  = corrfeat2.reshape(corrfeat2.shape[0], height_dim * width_dim, height_dim, width_dim)
-            ids = np.argpartition(atten1d, -topk_vis, axis=1)[:, -topk_vis:]
-            # ids = np.argsort(atten1d, axis=1)[:, -topk_vis:]
+            # Get the top-k IDs in each context frame for every target location:
+            ids = np.argpartition(atten1d, -args.topk_vis, axis=0)[
+                  -args.topk_vis:]  # [num_context_frames, topk_vis, height, width]
 
-            hid = ids // width_dim
-            wid = ids % width_dim
+            # Translate the top-k IDs to (h,w) spatial locations in the context patch:
+            pcid = ids // patch_dim ** 2
+            phid = (ids % patch_dim ** 2) // patch_dim
+            pwid = ids % patch_dim
 
-            vis_ids_h = wid.transpose(0, 2, 3, 1)
-            vis_ids_w = hid.transpose(0, 2, 3, 1)
+            # Translate the top-k IDs to absolute (h,w) spatial locations in the context feature map.
+            h, w = np.meshgrid(np.arange(height_dim), np.arange(width_dim), indexing='ij')
+            h = np.tile(h, (args.topk_vis, 1, 1))
+            w = np.tile(w, (args.topk_vis, 1, 1))
+            hid = h + phid - pcenter
+            wid = w + pwid - pcenter
+
+            vis_ids_h = hid.transpose(1, 2, 0)  # [height, width, topk_vis]
+            vis_ids_w = wid.transpose(1, 2, 0)  # [height, width, topk_vis]
+            pcid = pcid.transpose(1, 2, 0)  # [height, width, topk_vis]
+            phid = phid.transpose(1, 2, 0)  # [height, width, topk_vis]
+            pwid = pwid.transpose(1, 2, 0)  # [height, width, topk_vis]
 
             t06 = time.time()
 
             img_now = imgs_toprint[iter + finput_num_ori]
 
             predlbls = np.zeros((height_dim, width_dim, len(lbl_set)))
-            # predlbls2 = np.zeros((height_dim * width_dim, len(lbl_set)))
+            h, w, k = np.meshgrid(np.arange(height_dim), np.arange(width_dim), np.arange(args.topk_vis), indexing='ij')
 
-            for t in range(finput_num):
+            h, w = h.flatten(), w.flatten()  # [height*width*topk_vis]
+            hh, ww = vis_ids_h.flatten(), vis_ids_w.flatten()  # [height*width*topk_vis]
+            pcc, phh, pww = pcid.flatten(), phid.flatten(), pwid.flatten()
 
-                tt1 = time.time()
+            pcc[pcc != 0] += iter
+            lbl = lbls_resize2[pcc, hh, ww, :]
 
-                h, w, k = np.meshgrid(np.arange(height_dim), np.arange(width_dim), np.arange(topk_vis), indexing='ij')
-                h, w = h.flatten(), w.flatten()
-
-                hh, ww = vis_ids_h[t].flatten(), vis_ids_w[t].flatten()
-
-                if t == 0:
-                    lbl = lbls_resize2[0, hh, ww, :]
-                else:
-                    lbl = lbls_resize2[t + iter, hh, ww, :]
-
-                np.add.at(predlbls, (h, w), lbl * corrfeat2[t, ww, hh, h, w][:, None])
+            # Add the labels weighted by the affinities to locations (h,w) in predlbls:
+            np.add.at(predlbls, (h, w), lbl * corrfeat2[pcc, phh, pww, h, w][:, None])
 
             t07 = time.time()
-            # print(t07-t06, 'lbl proc', t06-t05, 'argsorts')
+            print(t07 - t06, 'lbl proc', t06 - t05, 'argsorts')
 
-            predlbls = predlbls / finput_num
+            predlbls = predlbls / num_context_frames
 
             for t in range(len(lbl_set)):
-                nowt = t
-                predlbls[:, :, nowt] = predlbls[:, :, nowt] - predlbls[:, :, nowt].min()
-                predlbls[:, :, nowt] = predlbls[:, :, nowt] / predlbls[:, :, nowt].max()
-
+                predlbls[:, :, t] = predlbls[:, :, t] - predlbls[:, :, t].min()
+                predlbls[:, :, t] = predlbls[:, :, t] / predlbls[:, :, t].max()
 
             lbls_resize2[iter + finput_num_ori] = predlbls
 
             predlbls_cp = predlbls.copy()
             predlbls_cp = cv2.resize(predlbls_cp, (params['imgSize'], params['imgSize']))
-            predlbls_val = np.zeros((params['imgSize'], params['imgSize'], 3))
-
-            ids = np.argmax(predlbls_cp[:, :, 1 : len(lbl_set)], 2)
 
             predlbls_val = np.array(lbl_set)[np.argmax(predlbls_cp, axis=-1)]
             predlbls_val = predlbls_val.astype(np.uint8)
-            predlbls_val2 = cv2.resize(predlbls_val, (img_now.shape[0], img_now.shape[1]), interpolation=cv2.INTER_NEAREST)
+            predlbls_val2 = cv2.resize(predlbls_val, (img_now.shape[1], img_now.shape[0]),
+                                       interpolation=cv2.INTER_NEAREST)
 
-            # activation_heatmap = cv2.applyColorMap(predlbls, cv2.COLORMAP_JET)
-            img_with_heatmap =  np.float32(img_now) * 0.5 + np.float32(predlbls_val2) * 0.5
+            img_with_heatmap = np.float32(img_now) * 0.5 + np.float32(predlbls_val2) * 0.5
 
-            imname  = save_path + str(batch_idx) + '_' + str(iter + finput_num_ori) + '_label.jpg'
-            imname2  = save_path + str(batch_idx) + '_' + str(iter + finput_num_ori) + '_mask.png'
+            imname = save_path + str(batch_idx) + '_' + str(iter + finput_num_ori) + '_label.jpg'
+            imname2 = save_path + str(batch_idx) + '_' + str(iter + finput_num_ori) + '_mask.png'
 
-            scipy.misc.imsave(imname, np.uint8(img_with_heatmap))
-            scipy.misc.imsave(imname2, np.uint8(predlbls_val))
+            imageio.imwrite(imname, np.uint8(img_with_heatmap))
+            imageio.imwrite(imname2, np.uint8(predlbls_val))
+            np.savez('/home/code-base/' + str(batch_idx) + '_' + str(iter + finput_num_ori) + '.npz',
+                     img_with_heatmap=img_with_heatmap, predlbls_val=predlbls_val)
 
 
+
+
+
+
+
+        import sys; sys.exit(0)
 
     fileout.close()
 
